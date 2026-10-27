@@ -48,6 +48,10 @@ The decisive last configuration change was enabling the NVIDIA display-class DWO
 
 The setting was found in the related [CMP50HX Windows installer source](https://github.com/xrip/cmp50hx-unlock/blob/df2fe11b370bb52cc314576d0f2f5ae47ce908f8/efi-unlock-windows/tools/inst50hx/main.go). No modified NVIDIA driver, BYOVD package or mining-driver bundle was installed for this successful test.
 
+## Build it yourself
+
+Start with [BUILD-GUIDE.md](BUILD-GUIDE.md). The included **build.bat** / **Build-Local.ps1** clones pinned source, applies the patch, fetches and verifies firmware inputs, prepares EDK2 and compiles the loader. Building does not install anything or change your boot configuration. The hardware-specific compatibility restrictions still apply.
+
 ## How it was done
 
 See [REPRODUCTION.md](REPRODUCTION.md) for source/build inputs, firmware provenance, staging procedure and verification. See [RECOVERY.md](RECOVERY.md) before experimenting with boot files.

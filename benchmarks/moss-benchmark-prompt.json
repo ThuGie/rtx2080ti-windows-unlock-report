@@ -1,0 +1,153 @@
+{
+  "4": {
+    "inputs": {
+      "text": "A detailed photograph of a red ceramic teapot on a wooden table beside a window, soft morning light, green garden in the background.",
+      "clip": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "moss-image Positive"
+    }
+  },
+  "5": {
+    "inputs": {
+      "text": "blurry, low quality",
+      "clip": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "moss-image Negative"
+    }
+  },
+  "6": {
+    "inputs": {
+      "width": 768,
+      "height": 768,
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    }
+  },
+  "13": {
+    "inputs": {
+      "double_layers": "",
+      "single_layers": "22",
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "model": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "_meta": {
+      "title": "Uncond skip (empty = off)"
+    }
+  },
+  "15": {
+    "inputs": {
+      "shift": 5.0,
+      "model": [
+        "20",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "Official Flow sigma shift"
+    }
+  },
+  "16": {
+    "inputs": {
+      "seed": 208011,
+      "steps": 20,
+      "cfg": 3.0,
+      "sampler_name": "euler",
+      "scheduler": "sgm_uniform",
+      "denoise": 1.0,
+      "model": [
+        "13",
+        0
+      ],
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode (first pass)"
+    }
+  },
+  "20": {
+    "inputs": {
+      "unet_name": "moss\\moss_image_sft_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "MOSSImageUNETLoader",
+    "_meta": {
+      "title": "MOSS-Image Load Diffusion Model"
+    }
+  },
+  "21": {
+    "inputs": {
+      "clip_name": "qwen3.5_9b_moss_image_sft_w4a8_gptq.safetensors",
+      "device": "default"
+    },
+    "class_type": "MOSSImageCLIPLoader",
+    "_meta": {
+      "title": "MOSS-Image Load Qwen3.5"
+    }
+  },
+  "22": {
+    "inputs": {
+      "vae_name": "moss_image_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "50": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "17",
+        0
+      ],
+      "filename_prefix": "rtx-unlock-benchmark/moss-baseline"
+    }
+  }
+}

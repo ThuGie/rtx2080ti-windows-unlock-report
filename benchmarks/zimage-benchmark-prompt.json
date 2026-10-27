@@ -1,0 +1,11 @@
+{
+  "20": {"class_type":"UNETLoader","inputs":{"unet_name":"z-image\\z_image_turbo_bf16.safetensors","weight_dtype":"default"}},
+  "21": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_3_4b.safetensors","type":"lumina2","device":"default"}},
+  "22": {"class_type":"VAELoader","inputs":{"vae_name":"ae.safetensors"}},
+  "4": {"class_type":"CLIPTextEncode","inputs":{"clip":["21",0],"text":"A detailed photograph of a red ceramic teapot on a wooden table beside a window, soft morning light, green garden in the background."}},
+  "5": {"class_type":"ConditioningZeroOut","inputs":{"conditioning":["4",0]}},
+  "6": {"class_type":"EmptySD3LatentImage","inputs":{"width":768,"height":768,"batch_size":1}},
+  "16": {"class_type":"KSampler","inputs":{"model":["20",0],"positive":["4",0],"negative":["5",0],"latent_image":["6",0],"seed":208011,"steps":9,"cfg":1.0,"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
+  "17": {"class_type":"VAEDecode","inputs":{"samples":["16",0],"vae":["22",0]}},
+  "50": {"class_type":"SaveImage","inputs":{"images":["17",0],"filename_prefix":"rtx-unlock-benchmark/zimage-post-injection"}}
+}

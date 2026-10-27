@@ -1,0 +1,4 @@
+*.efi
+*.bin
+*.img
+__pycache__/

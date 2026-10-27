@@ -1,0 +1,121 @@
+[
+  {
+    "run": 1,
+    "seed": 208011,
+    "wall_seconds": 20.168710799999985,
+    "history": {
+      "status": {
+        "status_str": "success",
+        "completed": true,
+        "messages": [
+          [
+            "execution_start",
+            {
+              "prompt_id": "d4fc1e08-9f39-4cca-b086-9fd7a6d8a5dd",
+              "timestamp": 1793137073260
+            }
+          ],
+          [
+            "execution_cached",
+            {
+              "nodes": [],
+              "prompt_id": "d4fc1e08-9f39-4cca-b086-9fd7a6d8a5dd",
+              "timestamp": 1793137073262
+            }
+          ],
+          [
+            "execution_success",
+            {
+              "prompt_id": "d4fc1e08-9f39-4cca-b086-9fd7a6d8a5dd",
+              "timestamp": 1793137091405
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "run": 2,
+    "seed": 208012,
+    "wall_seconds": 8.2230883,
+    "history": {
+      "status": {
+        "status_str": "success",
+        "completed": true,
+        "messages": [
+          [
+            "execution_start",
+            {
+              "prompt_id": "af93f2b6-ce1e-42ef-a28f-74678c77387f",
+              "timestamp": 1793137093427
+            }
+          ],
+          [
+            "execution_cached",
+            {
+              "nodes": [
+                "20",
+                "21",
+                "22",
+                "4",
+                "5",
+                "6"
+              ],
+              "prompt_id": "af93f2b6-ce1e-42ef-a28f-74678c77387f",
+              "timestamp": 1793137093428
+            }
+          ],
+          [
+            "execution_success",
+            {
+              "prompt_id": "af93f2b6-ce1e-42ef-a28f-74678c77387f",
+              "timestamp": 1793137101218
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "run": 3,
+    "seed": 208013,
+    "wall_seconds": 8.065414000000004,
+    "history": {
+      "status": {
+        "status_str": "success",
+        "completed": true,
+        "messages": [
+          [
+            "execution_start",
+            {
+              "prompt_id": "1f0c8763-16db-4242-98a0-881ef6769d12",
+              "timestamp": 1793137101642
+            }
+          ],
+          [
+            "execution_cached",
+            {
+              "nodes": [
+                "20",
+                "21",
+                "22",
+                "4",
+                "5",
+                "6"
+              ],
+              "prompt_id": "1f0c8763-16db-4242-98a0-881ef6769d12",
+              "timestamp": 1793137101643
+            }
+          ],
+          [
+            "execution_success",
+            {
+              "prompt_id": "1f0c8763-16db-4242-98a0-881ef6769d12",
+              "timestamp": 1793137109445
+            }
+          ]
+        ]
+      }
+    }
+  }
+]

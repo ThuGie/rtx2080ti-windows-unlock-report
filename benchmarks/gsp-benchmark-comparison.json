@@ -1,0 +1,34 @@
+{
+  "moss": {
+    "stock_seconds": [
+      45.364,
+      35.512,
+      36.32
+    ],
+    "gsp_unlock_seconds": [
+      44.586,
+      36.211,
+      36.68
+    ],
+    "stock_warm_mean": 35.916,
+    "gsp_unlock_warm_mean": 36.445499999999996,
+    "speedup_percent": -1.4528542618430174,
+    "time_saved_percent": -1.474273304376883
+  },
+  "zimage": {
+    "stock_seconds": [
+      18.145,
+      7.791,
+      7.803
+    ],
+    "gsp_unlock_seconds": [
+      16.388,
+      6.581,
+      6.64
+    ],
+    "stock_warm_mean": 7.797000000000001,
+    "gsp_unlock_warm_mean": 6.6105,
+    "speedup_percent": 17.948717948717952,
+    "time_saved_percent": 15.217391304347828
+  }
+}

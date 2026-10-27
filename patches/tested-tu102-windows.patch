@@ -1,0 +1,634 @@
+diff --git a/GpuUnlockPkg/Application/Loader/Arch.c b/GpuUnlockPkg/Application/Loader/Arch.c
+index 3e01a58..8fceac2 100644
+--- a/GpuUnlockPkg/Application/Loader/Arch.c
++++ b/GpuUnlockPkg/Application/Loader/Arch.c
+@@ -245,6 +245,7 @@ TuUnlockAll (
+     }
+     if (Ret) {
+       TuPrint (L"Unlock failed (%d)\r\n", Ret);
++      return EFI_DEVICE_ERROR;
+     } else {
+       TuPrint (L"Unlock completed.\r\n");
+     }
+diff --git a/GpuUnlockPkg/Application/Loader/Chainload.c b/GpuUnlockPkg/Application/Loader/Chainload.c
+index 3e27aaa..902abb8 100644
+--- a/GpuUnlockPkg/Application/Loader/Chainload.c
++++ b/GpuUnlockPkg/Application/Loader/Chainload.c
+@@ -3,6 +3,7 @@
+ #include "TuChainload.h"
+ #include "TuConfig.h"
+ #include "TuFs.h"
++#include "TuPci.h"
+ 
+ #include <Library/DevicePathLib.h>
+ #include <Library/UefiLib.h>
+@@ -399,9 +400,18 @@ StartWindowsImage (
+   UINTN       ExitSize;
+ 
+   TuPrint (L"Starting Windows Boot Manager...\r\n");
++  GU_NOTE ("chainload checkpoint: entering Windows StartImage\n");
++  TuLogFlush ();
++  if (!TuPciDisplayReadyForWindows ()) {
++    GU_ERROR ("final display/selector check failed; refusing Windows handoff\n");
++    TuLogFlush ();
++    CpuDeadLoop ();
++  }
+   ExitData = NULL;
+   ExitSize = 0;
+   Status   = gBS->StartImage (Image, &ExitSize, &ExitData);
++  GU_NOTE ("chainload checkpoint: StartImage returned status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
+   PrintStatus (L"StartImage returned", Status);
+   return Status;
+ }
+@@ -429,6 +439,10 @@ TryCandidate (
+ 
+   Status = EFI_NOT_FOUND;
+   for (Index = 0; Index < ARRAY_SIZE (mLoadTries); Index++) {
++    GU_NOTE ("chainload checkpoint: LoadImage attempt=%u buffer=%u boot_policy=%u\n",
++             (unsigned)Index, (unsigned)mLoadTries[Index].UseBuffer,
++             (unsigned)mLoadTries[Index].BootPolicy);
++    TuLogFlush ();
+     if (mLoadTries[Index].UseBuffer) {
+       Status = LoadFromBuffer (
+                  Parent,
+@@ -441,6 +455,8 @@ TryCandidate (
+     } else {
+       Status = LoadFromPath (Parent, Dp, mLoadTries[Index].BootPolicy, &Image);
+     }
++    GU_NOTE ("chainload checkpoint: LoadImage returned status=%lx\n", (UINT64)Status);
++    TuLogFlush ();
+     if (EFI_ERROR (Status)) {
+       PrintStatus (mLoadTries[Index].Name, Status);
+       continue;
+@@ -476,10 +492,14 @@ TryDevice (
+   EFI_STATUS  Last;
+   UINTN       Index;
+ 
++  GU_NOTE ("chainload checkpoint: restoring Microsoft boot manager\n");
++  TuLogFlush ();
+   Status = RestoreOfficialBootmgr (Device);
++  GU_NOTE ("chainload checkpoint: restore returned status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
+   if (EFI_ERROR (Status)) {
+-    TuPrint (L"WARNING: could not put signed bootmgfw.efi back on the BCD path.\r\n");
+-    TuPrint (L"Windows may show 0xc0000428 (unsigned wrapper still named bootmgfw.efi).\r\n");
++    TuPrint (L"Could not restore Microsoft boot manager. Refusing Windows handoff.\r\n");
++    return Status;
+   }
+ 
+   Last = EFI_NOT_FOUND;
+diff --git a/GpuUnlockPkg/Application/Loader/Fs.c b/GpuUnlockPkg/Application/Loader/Fs.c
+index 8339dee..07d810f 100644
+--- a/GpuUnlockPkg/Application/Loader/Fs.c
++++ b/GpuUnlockPkg/Application/Loader/Fs.c
+@@ -292,7 +292,9 @@ TuFsWriteDeviceFile (
+     Pos    = (UINT64)-1;
+     Status = File->SetPosition (File, Pos);
+     if (EFI_ERROR (Status)) {
+-      File->SetPosition (File, 0);
++        File->Close (File);
++        Root->Close (Root);
++        return Status;
+     }
+   } else {
+     File->Delete (File);
+@@ -319,6 +321,9 @@ TuFsWriteDeviceFile (
+   }
+   WriteSize = Size;
+   Status    = File->Write (File, &WriteSize, (VOID *)Buffer);
++    if (!EFI_ERROR (Status)) {
++      Status = File->Flush (File);
++    }
+   File->Close (File);
+   Root->Close (Root);
+   if (!EFI_ERROR (Status) && (WriteSize != Size)) {
+diff --git a/GpuUnlockPkg/Application/Loader/Loader.c b/GpuUnlockPkg/Application/Loader/Loader.c
+index 451a599..d0d0a42 100644
+--- a/GpuUnlockPkg/Application/Loader/Loader.c
++++ b/GpuUnlockPkg/Application/Loader/Loader.c
+@@ -47,18 +47,36 @@ UefiMain (
+   }
+   TuPrint (L"NVIDIA display GPUs: %u\r\n", GpuCount);
+ 
++  TuPciCaptureDisplayOwners (Gpus, GpuCount);
+   Action = TuMenuChoose (&Config, Gpus, GpuCount);
+   if (Action == TuActionInject) {
+     UINTN Index;
+ 
++    Status = gBS->SetWatchdogTimer (0, 0, 0, NULL);
++    if (EFI_ERROR (Status)) return Status;
++    Status = TuPciReleaseDisplay (ImageHandle, Gpus, GpuCount, TRUE);
++    if (EFI_ERROR (Status)) {
++      GU_ERROR ("display release refused or failed status=%lx; power off required\n", (UINT64)Status);
++      TuLogFlush ();
++      CpuDeadLoop ();
++    }
+     Status = TuUnlockAll (ImageHandle, &Config, Gpus, GpuCount);
+     GU_NOTE ("inject finished status=%x\n", Status);
++    if (EFI_ERROR (Status)) {
++      GU_ERROR ("unlock failed; refusing Windows handoff; full power off required\n");
++      TuLogFlush ();
++      TuPrint (L"Unlock failed. Fully power off the PC. Windows will not start from this attempt.\r\n");
++      CpuDeadLoop ();
++    }
+     for (Index = 0; Index < GpuCount; Index++) {
+       TuPciReadFeat (&Gpus[Index]);
+     }
+     TuPrint (L"\r\nFeat AFTER inject:\r\n");
+     TuMenuPrintFeat (Gpus, GpuCount);
+-    TuMenuWaitContinue (TU_POST_INJECT_WAIT_SEC);
++    Status = TuPciFinishDisplay (ImageHandle, Gpus, GpuCount);
++    GU_NOTE ("display release finish status=%lx\n", (UINT64)Status);
++    TuLogFlush ();
++    if (EFI_ERROR (Status)) CpuDeadLoop ();
+   } else {
+     TuPrint (L"Inject skipped. Continuing to Windows.\r\n");
+     GU_NOTE ("inject skipped by menu action=%u\n", (unsigned)Action);
+diff --git a/GpuUnlockPkg/Application/Loader/Loader.inf b/GpuUnlockPkg/Application/Loader/Loader.inf
+index 159ca56..74a836f 100644
+--- a/GpuUnlockPkg/Application/Loader/Loader.inf
++++ b/GpuUnlockPkg/Application/Loader/Loader.inf
+@@ -49,6 +49,9 @@
+   PcdLib
+ 
+ [Protocols]
++  gEfiGraphicsOutputProtocolGuid
++  gEfiDriverBindingProtocolGuid
++  gEfiSimpleTextOutProtocolGuid
+   gEfiPciIoProtocolGuid
+   gEfiPciRootBridgeIoProtocolGuid
+   gEfiSimpleTextInProtocolGuid
+diff --git a/GpuUnlockPkg/Application/Loader/Log.c b/GpuUnlockPkg/Application/Loader/Log.c
+index af9441d..b5a72da 100644
+--- a/GpuUnlockPkg/Application/Loader/Log.c
++++ b/GpuUnlockPkg/Application/Loader/Log.c
+@@ -2,6 +2,7 @@
+ #include "TuCompat.h"
+ #include "TuConfig.h"
+ #include "TuFs.h"
++#include <Library/UefiRuntimeServicesTableLib.h>
+ 
+ #define TU_LOG_MAX  (64u * 1024u)
+ 
+@@ -10,6 +11,13 @@ STATIC BOOLEAN     mLogVerbose = TRUE;
+ STATIC CHAR8       *mLogBuf;
+ STATIC UINTN       mLogLen;
+ STATIC UINTN       mLogCap;
++STATIC BOOLEAN     mLogWritten;
++STATIC BOOLEAN     mDisplaySilent;
++
++VOID TuLogSilenceDisplay (VOID)
++{
++  mDisplaySilent = TRUE;
++}
+ 
+ STATIC
+ BOOLEAN
+@@ -91,7 +99,7 @@ TuEmitAscii (
+     Wide[Out++] = (CHAR16)(UINT8)Text[Index++];
+   }
+   Wide[Out] = 0;
+-  if (mLogVerbose && gST != NULL && gST->ConOut != NULL) {
++  if (!mDisplaySilent && mLogVerbose && gST != NULL && gST->ConOut != NULL) {
+     gST->ConOut->OutputString (gST->ConOut, Wide);
+   }
+   TuLogAppend (Text);
+@@ -303,7 +311,17 @@ TuLogInit (
+   mLogImage   = ImageHandle;
+   mLogVerbose = Verbose;
+   mLogLen     = 0;
++  /* Preserve failed attempts when a later recovery boot skips injection. */
++  mLogWritten = TRUE;
+   TuLogAppend ("---- turing-unlock loader ----\r\n");
++  {
++    EFI_TIME Time;
++    if (!EFI_ERROR (gRT->GetTime (&Time, NULL))) {
++      GU_NOTE ("persistent boot log %u-%02u-%02u %02u:%02u:%02u firmware time\n",
++               (unsigned)Time.Year, (unsigned)Time.Month, (unsigned)Time.Day,
++               (unsigned)Time.Hour, (unsigned)Time.Minute, (unsigned)Time.Second);
++    }
++  }
+ }
+ 
+ VOID
+@@ -316,13 +334,14 @@ TuLogFlush (
+   if (mLogImage == NULL || mLogBuf == NULL || mLogLen == 0) {
+     return;
+   }
+-  Status = TuFsWriteFile (mLogImage, TU_LOG_NAME, mLogBuf, mLogLen, FALSE);
++  Status = TuFsWriteFile (mLogImage, TU_LOG_NAME, mLogBuf, mLogLen, mLogWritten);
+   if (EFI_ERROR (Status)) {
+-    if (gST != NULL && gST->ConOut != NULL) {
++    if (!mDisplaySilent && gST != NULL && gST->ConOut != NULL) {
+       gST->ConOut->OutputString (gST->ConOut, L"unlock.log write failed\r\n");
+     }
+     return;
+   }
++  mLogWritten = TRUE;
+   FreePool (mLogBuf);
+   mLogBuf = NULL;
+   mLogLen = 0;
+@@ -363,7 +382,7 @@ TuPrint (
+   VA_START (Args, Fmt);
+   UnicodeVSPrint (Line, sizeof (Line), Fmt, Args);
+   VA_END (Args);
+-  if (gST != NULL && gST->ConOut != NULL) {
++  if (!mDisplaySilent && gST != NULL && gST->ConOut != NULL) {
+     gST->ConOut->OutputString (gST->ConOut, Line);
+   }
+ }
+diff --git a/GpuUnlockPkg/Application/Loader/Pci.c b/GpuUnlockPkg/Application/Loader/Pci.c
+index d45b727..f9666c4 100644
+--- a/GpuUnlockPkg/Application/Loader/Pci.c
++++ b/GpuUnlockPkg/Application/Loader/Pci.c
+@@ -4,6 +4,260 @@
+ #include "TuPci.h"
+ 
+ #include <IndustryStandard/Pci.h>
++#include <Protocol/GraphicsOutput.h>
++#include <Protocol/LoadedImage.h>
++#include <Protocol/DriverBinding.h>
++#include <Protocol/SimpleTextOut.h>
++#include <Library/DevicePathLib.h>
++
++STATIC EFI_HANDLE mReleasedPci;
++STATIC BOOLEAN mDisplayReleased;
++STATIC BOOLEAN mDisplayPreserved;
++STATIC EFI_PCI_IO_PROTOCOL *mReleasedIo;
++STATIC UINT8 mReleasedBar;
++
++STATIC EFI_STATUS
++FindPinnedOwner (EFI_HANDLE Controller, EFI_GUID *Protocol, CONST CHAR16 *Path,
++                 UINT64 Size, UINT32 Version, UINTN StopOffset, EFI_HANDLE *Owner)
++{
++  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *Entries = NULL;
++  UINTN Count = 0, Index, Found = 0;
++  EFI_STATUS Status = gBS->OpenProtocolInformation (Controller, Protocol, &Entries, &Count);
++  if (EFI_ERROR (Status)) return Status;
++  *Owner = NULL;
++  for (Index = 0; Index < Count; Index++) {
++    EFI_DRIVER_BINDING_PROTOCOL *Binding = NULL;
++    EFI_LOADED_IMAGE_PROTOCOL *Image = NULL;
++    CHAR16 *Actual;
++    if (!(Entries[Index].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER)) continue;
++    Found++;
++    Status = gBS->HandleProtocol (Entries[Index].AgentHandle,
++                                  &gEfiDriverBindingProtocolGuid, (VOID **)&Binding);
++    if (EFI_ERROR (Status) || Binding == NULL || Binding->Version != Version) break;
++    Status = gBS->HandleProtocol (Binding->ImageHandle,
++                                  &gEfiLoadedImageProtocolGuid, (VOID **)&Image);
++    if (EFI_ERROR (Status) || Image == NULL || Image->ImageSize != Size ||
++        Image->ImageCodeType != EfiBootServicesCode ||
++        (UINTN)Binding->Stop != (UINTN)Image->ImageBase + StopOffset) break;
++    Actual = ConvertDevicePathToText (Image->FilePath, FALSE, FALSE);
++    if (Actual == NULL) break;
++    if (StrCmp (Actual, Path) == 0) *Owner = Entries[Index].AgentHandle;
++    FreePool (Actual);
++  }
++  FreePool (Entries);
++  return Found == 1 && *Owner != NULL ? EFI_SUCCESS : EFI_UNSUPPORTED;
++}
++
++STATIC BOOLEAN NoDriverOwner (EFI_HANDLE Handle, EFI_GUID *Protocol)
++{
++  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *Entries = NULL;
++  UINTN Count = 0, Index;
++  EFI_STATUS Status = gBS->OpenProtocolInformation (Handle, Protocol, &Entries, &Count);
++  if (EFI_ERROR (Status)) return Status == EFI_NOT_FOUND || Status == EFI_UNSUPPORTED;
++  for (Index = 0; Index < Count; Index++) {
++    if (Entries[Index].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER) {
++      FreePool (Entries);
++      return FALSE;
++    }
++  }
++  if (Entries != NULL) FreePool (Entries);
++  return TRUE;
++}
++
++EFI_STATUS TuPciReleaseDisplay (EFI_HANDLE ImageHandle, TU_PCI_GPU *Gpus, UINTN Count, BOOLEAN Preserve)
++{
++  EFI_HANDLE *Gops = NULL, NvOwner, GfxOwner, TextOwner, Gop;
++  UINTN GopCount = 0;
++  EFI_STATUS Status;
++  EFI_PCI_IO_PROTOCOL *Claim = NULL;
++  UINT32 Subsystem = 0;
++  if (Count != 1 || Gpus[0].DeviceId != 0x1e07 || Gpus[0].Segment != 0 ||
++      Gpus[0].Bus != 1 || Gpus[0].Device != 0 || Gpus[0].Function != 0) return EFI_UNSUPPORTED;
++  Status = Gpus[0].PciIo->Pci.Read (Gpus[0].PciIo, EfiPciIoWidthUint32, 0x2c, 1, &Subsystem);
++  if (EFI_ERROR (Status) || Subsystem != 0x866a1043) return EFI_UNSUPPORTED;
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiGraphicsOutputProtocolGuid, NULL, &GopCount, &Gops);
++  if (EFI_ERROR (Status)) return Status;
++  if (GopCount != 1) { FreePool (Gops); return EFI_UNSUPPORTED; }
++  Gop = Gops[0];
++  FreePool (Gops);
++  Status = FindPinnedOwner (Gpus[0].Handle, &gEfiPciIoProtocolGuid,
++                            L"nvgop-tu1xx", 133696, 0x50009, 0x2888, &NvOwner);
++  if (EFI_ERROR (Status)) return Status;
++  Status = FindPinnedOwner (Gop, &gEfiGraphicsOutputProtocolGuid,
++                            L"FvFile(43E7ABDD-E352-4CFB-A230-4CDC1D350E5C)",
++                            21696, 0x10, 0x9dc, &GfxOwner);
++  if (EFI_ERROR (Status)) return Status;
++  Status = FindPinnedOwner (Gop, &gEfiSimpleTextOutProtocolGuid,
++                            L"FvFile(628A497D-2BF6-4264-8741-069DBD3399D6)",
++                            25856, 0x10, 0x12cc, &TextOwner);
++  if (EFI_ERROR (Status)) return Status;
++  if (Preserve) {
++  TuPrint (L"Testing normal finalization with native GOP ownership preserved.\r\n");
++  GU_NOTE ("display comparison: preserve verified native GOP owners; console callbacks silenced\n");
++  TuLogFlush ();
++  TuLogSilenceDisplay ();
++  mReleasedPci = Gpus[0].Handle;
++  mReleasedIo = Gpus[0].PciIo;
++  mReleasedBar = Gpus[0].BarIndex;
++  mDisplayPreserved = TRUE;
++  return EFI_SUCCESS;
++  }
++  TuPrint (L"Releasing verified firmware display drivers. Screen may freeze until Windows.\r\n");
++  GU_NOTE ("display release preflight passed: ASUS 1e07/866a, native GOP pinned\n");
++  TuLogFlush ();
++  TuLogSilenceDisplay ();
++  GU_NOTE ("display release intent: disconnect text owner\n");
++  TuLogFlush ();
++  Status = gBS->DisconnectController (Gop, TextOwner, NULL);
++  GU_NOTE ("display release text status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
++  if (EFI_ERROR (Status) || !NoDriverOwner (Gop, &gEfiSimpleTextOutProtocolGuid)) return EFI_DEVICE_ERROR;
++  GU_NOTE ("display release intent: disconnect graphics owner\n");
++  TuLogFlush ();
++  Status = gBS->DisconnectController (Gop, GfxOwner, NULL);
++  GU_NOTE ("display release graphics status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
++  if (EFI_ERROR (Status) || !NoDriverOwner (Gop, &gEfiGraphicsOutputProtocolGuid)) return EFI_DEVICE_ERROR;
++  GU_NOTE ("display release intent: disconnect NVIDIA GOP owner\n");
++  TuLogFlush ();
++  Status = gBS->DisconnectController (Gpus[0].Handle, NvOwner, NULL);
++  GU_NOTE ("display release nvgop status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
++  if (EFI_ERROR (Status) || !NoDriverOwner (Gpus[0].Handle, &gEfiPciIoProtocolGuid)) return EFI_DEVICE_ERROR;
++  Status = gBS->OpenProtocol (Gpus[0].Handle, &gEfiPciIoProtocolGuid, (VOID **)&Claim,
++                              ImageHandle, Gpus[0].Handle, EFI_OPEN_PROTOCOL_BY_DRIVER | EFI_OPEN_PROTOCOL_EXCLUSIVE);
++  GU_NOTE ("display exclusive PCI claim status=%lx\n", (UINT64)Status);
++  TuLogFlush ();
++  if (EFI_ERROR (Status) || Claim != Gpus[0].PciIo) return EFI_DEVICE_ERROR;
++  mReleasedPci = Gpus[0].Handle;
++  mReleasedIo = Gpus[0].PciIo;
++  mReleasedBar = Gpus[0].BarIndex;
++  mDisplayReleased = TRUE;
++  return EFI_SUCCESS;
++}
++
++BOOLEAN TuPciDisplayReadyForWindows (VOID)
++{
++  EFI_HANDLE *Gops = NULL;
++  UINTN Count = 0;
++  UINT16 Command = 0xffff;
++  EFI_STATUS Status;
++  if (!mDisplayReleased && !mDisplayPreserved) return TRUE;
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiGraphicsOutputProtocolGuid, NULL, &Count, &Gops);
++  if (Gops != NULL) FreePool (Gops);
++  if (mDisplayReleased && (Status != EFI_NOT_FOUND || Count != 0 ||
++      !NoDriverOwner (mReleasedPci, &gEfiPciIoProtocolGuid))) return FALSE;
++  if (mDisplayPreserved && (EFI_ERROR (Status) || Count != 1)) return FALSE;
++  Status = mReleasedIo->Pci.Read (mReleasedIo, EfiPciIoWidthUint16, 4, 1, &Command);
++  if (EFI_ERROR (Status) || (Command & 4) || !(Command & 2)) return FALSE;
++  return TuPciMemRead32 (mReleasedIo, mReleasedBar, TU_TURING_FEAT_SS0) == TU_SS0_FULL &&
++         TuPciMemRead32 (mReleasedIo, mReleasedBar, TU_TURING_FEAT_SS1) == TU_SS1_FULL &&
++         TuPciMemRead32 (mReleasedIo, mReleasedBar, TU_TURING_FEAT_READOUT) == 0;
++}
++
++EFI_STATUS TuPciFinishDisplay (EFI_HANDLE ImageHandle, TU_PCI_GPU *Gpus, UINTN Count)
++{
++  EFI_HANDLE *Gops = NULL;
++  UINTN GopCount = 0;
++  EFI_STATUS Status;
++  if (mDisplayPreserved && Count == 1 && Gpus[0].Handle == mReleasedPci) {
++    return TuPciDisplayReadyForWindows () ? EFI_SUCCESS : EFI_DEVICE_ERROR;
++  }
++  if (!mDisplayReleased || Count != 1 || Gpus[0].Handle != mReleasedPci) return EFI_NOT_READY;
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiGraphicsOutputProtocolGuid, NULL, &GopCount, &Gops);
++  if (Gops != NULL) FreePool (Gops);
++  if (Status != EFI_NOT_FOUND || GopCount != 0) return EFI_ACCESS_DENIED;
++  Status = gBS->CloseProtocol (mReleasedPci, &gEfiPciIoProtocolGuid, ImageHandle, mReleasedPci);
++  if (EFI_ERROR (Status) || !NoDriverOwner (mReleasedPci, &gEfiPciIoProtocolGuid)) return EFI_DEVICE_ERROR;
++  return EFI_SUCCESS;
++}
++
++STATIC
++VOID
++CaptureOwners (EFI_HANDLE Handle, EFI_GUID *Protocol, CONST CHAR8 *Kind)
++{
++  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *Entries = NULL;
++  UINTN Count = 0;
++  UINTN Index;
++  EFI_STATUS Status;
++
++  Status = gBS->OpenProtocolInformation (Handle, Protocol, &Entries, &Count);
++  GU_NOTE ("ownership kind=%a handle=%p status=%lx entries=%u\n",
++           Kind, Handle, (UINT64)Status, (unsigned)Count);
++  if (EFI_ERROR (Status)) {
++    return;
++  }
++  for (Index = 0; Index < Count; Index++) {
++    EFI_LOADED_IMAGE_PROTOCOL *Image = NULL;
++    EFI_DRIVER_BINDING_PROTOCOL *Binding = NULL;
++    EFI_HANDLE ImageHandle = Entries[Index].AgentHandle;
++    CHAR16 *WidePath;
++    CHAR8 Path[512];
++
++    GU_NOTE ("ownership entry agent=%p controller=%p attributes=%#x count=%u\n",
++             Entries[Index].AgentHandle, Entries[Index].ControllerHandle,
++             Entries[Index].Attributes, Entries[Index].OpenCount);
++    Status = gBS->HandleProtocol (Entries[Index].AgentHandle,
++                                 &gEfiDriverBindingProtocolGuid, (VOID **)&Binding);
++    if (!EFI_ERROR (Status) && Binding != NULL) {
++      ImageHandle = Binding->ImageHandle;
++      GU_NOTE ("ownership binding agent=%p image=%p version=%#x stop=%p\n",
++               Entries[Index].AgentHandle, ImageHandle, Binding->Version, Binding->Stop);
++    }
++    Status = gBS->HandleProtocol (ImageHandle,
++                                 &gEfiLoadedImageProtocolGuid, (VOID **)&Image);
++    if (!EFI_ERROR (Status) && Image != NULL) {
++      GU_NOTE ("ownership image agent=%p base=%p size=%llu code_type=%u\n",
++               Entries[Index].AgentHandle, Image->ImageBase, Image->ImageSize,
++               (unsigned)Image->ImageCodeType);
++      WidePath = ConvertDevicePathToText (Image->FilePath, FALSE, FALSE);
++      if (WidePath != NULL) {
++        if (StrLen (WidePath) < sizeof (Path) &&
++            !EFI_ERROR (UnicodeStrToAsciiStrS (WidePath, Path, sizeof (Path)))) {
++          GU_NOTE ("ownership image_path=%a\n", Path);
++        }
++        FreePool (WidePath);
++      }
++    }
++  }
++  if (Entries != NULL) {
++    FreePool (Entries);
++  }
++}
++
++VOID
++TuPciCaptureDisplayOwners (IN TU_PCI_GPU *Gpus, IN UINTN Count)
++{
++  EFI_HANDLE *Handles = NULL;
++  UINTN HandleCount = 0;
++  UINTN Index;
++  EFI_STATUS Status;
++
++  GU_NOTE ("ownership capture v2-native-20261027: read-only, no disconnects\n");
++  for (Index = 0; Index < Count; Index++) {
++    CaptureOwners (Gpus[Index].Handle, &gEfiPciIoProtocolGuid, "GPU-PCI");
++  }
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiGraphicsOutputProtocolGuid,
++                                   NULL, &HandleCount, &Handles);
++  if (!EFI_ERROR (Status)) {
++    for (Index = 0; Index < HandleCount; Index++) {
++      CaptureOwners (Handles[Index], &gEfiGraphicsOutputProtocolGuid, "GOP");
++    }
++    FreePool (Handles);
++  }
++  GU_NOTE ("ownership capture end GOP_count=%u\n", (unsigned)HandleCount);
++  Handles = NULL;
++  HandleCount = 0;
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiSimpleTextOutProtocolGuid,
++                                   NULL, &HandleCount, &Handles);
++  if (!EFI_ERROR (Status)) {
++    for (Index = 0; Index < HandleCount; Index++) {
++      CaptureOwners (Handles[Index], &gEfiSimpleTextOutProtocolGuid, "TEXT-OUT");
++    }
++    FreePool (Handles);
++  }
++  TuLogFlush ();
++}
+ 
+ BOOLEAN
+ TuPciIsSupportedDeviceId (
+diff --git a/GpuUnlockPkg/Arch/Turing/Unlock.c b/GpuUnlockPkg/Arch/Turing/Unlock.c
+index df9129b..126a888 100644
+--- a/GpuUnlockPkg/Arch/Turing/Unlock.c
++++ b/GpuUnlockPkg/Arch/Turing/Unlock.c
+@@ -25,7 +25,7 @@
+ #define TU_SS1_UNLOCK   0x8u
+ 
+ #define BOOTER_FILE     L"\\EFI\\turing-unlock\\firmware\\booter_load_tu102.bin"
+-#define V67_FILE        L"\\EFI\\turing-unlock\\firmware\\v67-tu102-610.43.03.bin"
++#define V67_FILE        L"\\EFI\\turing-unlock\\firmware\\v67-tu102-normal-finalize.bin"
+ #define GSP_FILE        L"\\EFI\\turing-unlock\\firmware\\gsp_tu10x.bin"
+ #define BOOT_FILE       L"\\EFI\\turing-unlock\\firmware\\gsp_boot_tu102.bin"
+ #define BOOT_DESC_FILE  L"\\EFI\\turing-unlock\\firmware\\gsp_boot_desc_tu102.bin"
+@@ -591,7 +591,7 @@ sec_hs_fire (
+   mb1 = rd (w, SEC_BASE + 0x44);
+   GU_NOTE ("sec done: halted=%u plm=%#x mailbox=%#x:%#x\n",
+            !!(cpuctl & (1u << 4)), plm, mb1, mb0);
+-  if (plm != ~0u || mb0) {
++  if (plm != 0xffffff8fu || mb0) {
+     GU_ERROR ("sec fire failed: halted=%u mb0=%#x plm=%#x\n",
+               !!(cpuctl & (1u << 4)), mb0, plm);
+     return -EIO;
+@@ -670,7 +670,10 @@ tu_flr (
+   EFI_STATUS Status;
+ 
+   if (w->MasterOn) {
+-    TuPciClearMaster (w->PciIo);
++    if (EFI_ERROR (TuPciClearMaster (w->PciIo))) {
++      GU_ERROR ("failed to disable bus mastering; retaining DMA until power off\n");
++      return -EIO;
++    }
+     w->MasterOn = FALSE;
+   }
+   Status = TuPciFlr (w->PciIo);
+@@ -926,12 +929,12 @@ TuUnlockGpu (
+   }
+   w->SecQuiesced = w->SecStarted;
+   plm = rd (w, TU_FEAT_PLM);
+-  if (plm != ~0u) {
++  if (plm != 0xffffff8fu) {
+     ret = GU_DIAG (-EIO);
+     goto out;
+   }
+-  wr (w, TU_FEAT_SS0, TU_SS0_UNLOCK);
+-  wr (w, TU_FEAT_SS1, TU_SS1_UNLOCK);
++  /* The pinned original payload writes selectors in secure firmware and
++   * returns through Booter finalization, restoring PLM/WPR before handoff. */
+   ss0     = rd (w, TU_FEAT_SS0);
+   ss1     = rd (w, TU_FEAT_SS1);
+   readout = rd (w, TU_FEAT_READOUT);
+@@ -939,7 +942,30 @@ TuUnlockGpu (
+   if (ss0 != TU_SS0_UNLOCK || ss1 != TU_SS1_UNLOCK || readout) {
+     ret = GU_DIAG (-EIO);
+   } else {
+-    GU_NOTE ("TU102 FEAT UNLOCKED\n");
++    u32 lo = rd (w, 0x1fa824), hi = rd (w, 0x1fa828);
++    GU_NOTE ("normal finalize: plm=%#x wpr2=%#x:%#x\n", plm, hi, lo);
++    if (lo != 0x1ffffe00u || hi != 0) {
++      ret = GU_DIAG (-EIO);
++      goto out;
++    }
++    w->SecQuiesced = FALSE;
++    ret = flcn_reset (w, SEC_BASE);
++    if (ret) goto out;
++    w->SecQuiesced = TRUE;
++    w->GspQuiesced = FALSE;
++    ret = flcn_reset (w, GSP_BASE);
++    if (ret) goto out;
++    w->GspQuiesced = TRUE;
++    wr (w, SEC_BASE + 0x40, 0);
++    wr (w, SEC_BASE + 0x44, 0);
++    if (rd (w, TU_FEAT_SS0) != TU_SS0_UNLOCK ||
++        rd (w, TU_FEAT_SS1) != TU_SS1_UNLOCK ||
++        (rd (w, SEC_BASE + 0x100) & 2u) ||
++        (rd (w, GSP_BASE + 0x100) & 2u)) {
++      ret = GU_DIAG (-EIO);
++      goto out;
++    }
++    GU_NOTE ("TU102 FEAT UNLOCKED: normal-finalize cleanup verified\n");
+   }
+ 
+ out:
+@@ -955,7 +981,10 @@ out:
+     return ret;
+   }
+   if (w->MasterOn) {
+-    TuPciClearMaster (w->PciIo);
++    if (EFI_ERROR (TuPciClearMaster (w->PciIo))) {
++      GU_ERROR ("cleanup failed to disable bus mastering; retaining DMA until power off\n");
++      return -EIO;
++    }
+     w->MasterOn = FALSE;
+   }
+   if (w->Pages != NULL) {
+diff --git a/GpuUnlockPkg/Include/TuPci.h b/GpuUnlockPkg/Include/TuPci.h
+index d02c9e2..1f60c08 100644
+--- a/GpuUnlockPkg/Include/TuPci.h
++++ b/GpuUnlockPkg/Include/TuPci.h
+@@ -88,6 +88,17 @@ TuPciConnectInput (
+   VOID
+   );
+ 
++VOID
++TuPciCaptureDisplayOwners (
++  IN TU_PCI_GPU *Gpus,
++  IN UINTN Count
++  );
++
++EFI_STATUS TuPciReleaseDisplay (EFI_HANDLE ImageHandle, TU_PCI_GPU *Gpus, UINTN Count, BOOLEAN Preserve);
++EFI_STATUS TuPciFinishDisplay (EFI_HANDLE ImageHandle, TU_PCI_GPU *Gpus, UINTN Count);
++VOID TuLogSilenceDisplay (VOID);
++BOOLEAN TuPciDisplayReadyForWindows (VOID);
++
+ UINT32
+ TuPciMemRead32 (
+   IN EFI_PCI_IO_PROTOCOL  *PciIo,
+diff --git a/tools/Install-GpuUnlockBoot.ps1 b/tools/Install-GpuUnlockBoot.ps1
+index ea4a3d6..b6f5e0f 100644
+--- a/tools/Install-GpuUnlockBoot.ps1
++++ b/tools/Install-GpuUnlockBoot.ps1
+@@ -72,7 +72,7 @@ $replacedFallback = $false
+ $fallback = Join-Path $Esp $script:FallbackRel
+ if (Test-Path -LiteralPath $fallback) {
+     $replaceFb = $AlsoFallback
+-    if (-not $AlsoFallback -and -not (Test-WrapperFile $fallback)) {
++    if ($AlsoFallback -and -not (Test-WrapperFile $fallback)) {
+         $origHash = Get-FileSha256 $backup
+         $fbHash = Get-FileSha256 $fallback
+         if ($origHash -and $origHash -eq $fbHash) {

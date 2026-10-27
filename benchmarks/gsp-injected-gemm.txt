@@ -1,0 +1,19 @@
+GPU      NVIDIA GeForce RTX 2080 Ti
+CC       7.5   VRAM 10.8 GiB
+PyTorch  2.12.1+cu130   CUDA 13.0
+Driver   617.42   power 161.49 W   SM 1470 MHz   MEM 6800 MHz   temp 41 C
+Peak ref 56.9 TFLOPS  (2080 Ti whitepaper, this project's 100%)
+
+dtype    A,B,C = fp16   (tensor cores, fp32 accumulate inside cuBLAS)
+sizes    M=N=K
+
+   M.N.K        ms    TFLOPS    %peak    README stock   README unlock
+------------------------------------------------------------------------
+    4096     1.612      85.3   149.9%            53.7            81.7   (best 96.1, 240 iters)
+    8192    13.285      82.8   145.5%            52.8            77.9   (best 86.6, 30 iters)
+
+after    power 256.66 W   SM 1410 MHz   temp 41 C
+
+Compare TFLOPS to the Linux README stock vs unlock columns on the same SKU.
+TITAN RTX is a full 72-SM TU102 (2080 Ti is 68 SM). Stock TITAN RTX already
+reaches/exceeds unlocked 2080 Ti peaks; inject is not expected to add ~1.5x.
